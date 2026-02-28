@@ -7,6 +7,8 @@ import {
   ActivityIndicator,
   Pressable,
   Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { Image } from "expo-image";
 import * as MediaLibrary from "expo-media-library";
@@ -134,9 +136,10 @@ export default function CameraRollScreen() {
           stage === "ready" ? "Ready to search" : null;
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
       <Text style={styles.title}>FotoFindr</Text>
-      <SearchBar />
+
       {stage !== "idle" && stage !== "ready" && statusLabel && (
         <View style={styles.statusBar}>
           <ActivityIndicator size="small" color="#6c63ff" />
@@ -147,6 +150,7 @@ export default function CameraRollScreen() {
         <Text style={styles.statusReady}>{statusLabel}</Text>
       )}
 
+      {/* images */}
       {loading ? (
         <ActivityIndicator color="#6c63ff" style={{ marginTop: 40 }} />
       ) : permissionDenied ? (
@@ -176,6 +180,7 @@ export default function CameraRollScreen() {
           ListFooterComponentStyle={{ paddingBottom: 30 }}
         />
       )}
+
       <Modal
         visible={!!selectedImage}
         transparent
@@ -183,22 +188,22 @@ export default function CameraRollScreen() {
         onRequestClose={() => setSelectedImage(null)}
       >
         <View style={styles.modalContainer}>
-          <Pressable onPress={() => setSelectedImage(null)} style={{ flex: 1, width: "100%" }}>
-            <View style={styles.modalContent}>
+          <View style={styles.modalContent}>
+            <Pressable onPress={() => setSelectedImage(null)}
+              style={styles.modalImage}>
               <Image
                 source={{ uri: selectedImage! }}
                 style={styles.modalImage}
               />
-              <View style={styles.descriptionSection}>
-                <View style={styles.labelsContainer}>
-                  <Text style={styles.label}>Label 1</Text>
-                  <Text style={styles.label}>Label 2</Text>
-                  <Text style={styles.label}>Label 3</Text>
-                </View>
+            </Pressable>
+            <View style={styles.descriptionSection}>
+              <View style={styles.labelsContainer}>
+                <Text style={styles.label}>Label 1</Text>
+                <Text style={styles.label}>Label 2</Text>
+                <Text style={styles.label}>Label 3</Text>
               </View>
             </View>
-          </Pressable>
-          {/* </ParallaxScrollView> */}
+          </View>
           <Pressable
             style={styles.closeButton}
             onPress={() => setSelectedImage(null)}
@@ -207,7 +212,9 @@ export default function CameraRollScreen() {
           </Pressable>
         </View>
       </Modal>
-    </View>
+
+      <SearchBar />
+    </KeyboardAvoidingView>
   );
 }
 
@@ -239,7 +246,7 @@ const styles = StyleSheet.create({
   },
 
   descriptionSection: {
-    flex: 1,
+    flex: 2,
     width: "100%",
     padding: 16,
     backgroundColor: "rgba(0,0,0,0.7)",
