@@ -52,3 +52,4 @@ ultralytics/
 # Storage + Other
 backend/uploads/
 mobile/constants/api.ts
+fotofindr.db
