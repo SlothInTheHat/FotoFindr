@@ -49,3 +49,5 @@ Search API
 cd mobile ; npx expo start
 cd backend ; uvicorn main:app --host 0.0.0.0 --port 8000
 ```
+
+Note the server should be HTTP! (not HTTPS)

@@ -15,6 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from PIL import Image, ExifTags
+import io
+
 from backend.db import (
     init_db,
     insert_photo,
@@ -80,6 +83,8 @@ async def upload_photo(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: str = Form(...),
+    max_width: int = 1080,  # max width for resizing
+    quality: int = 85,  # JPEG quality
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=415, detail="Only image files accepted.")
@@ -89,15 +94,55 @@ async def upload_photo(
         raise HTTPException(status_code=413, detail="File too large.")
 
     photo_id = str(uuid.uuid4())
-    ext = Path(file.filename or "photo.jpg").suffix or ".jpg"
-    save_path = UPLOAD_DIR / f"{photo_id}{ext}"
-    save_path.write_bytes(file_bytes)
-    storage_url = f"/uploads/{photo_id}{ext}"
+    save_path = UPLOAD_DIR / f"{photo_id}.jpg"
+
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+
+        # Fix orientation based on EXIF
+        try:
+            for orientation in ExifTags.TAGS.keys():
+                if ExifTags.TAGS[orientation] == "Orientation":
+                    break
+            exif = img._getexif()
+            if exif is not None:
+                orientation_value = exif.get(orientation)
+                if orientation_value == 3:
+                    img = img.rotate(180, expand=True)
+                elif orientation_value == 6:
+                    img = img.rotate(270, expand=True)
+                elif orientation_value == 8:
+                    img = img.rotate(90, expand=True)
+        except Exception:
+            # ignore if EXIF not present
+            pass
+
+        # Convert to RGB for JPEG compatibility
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+
+        # Resize while keeping aspect ratio
+        if img.width > max_width:
+            ratio = max_width / img.width
+            new_height = int(img.height * ratio)
+            img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+
+        # Save compressed JPEG
+        img.save(save_path, format="JPEG", quality=quality, optimize=True)
+
+        compressed_bytes = save_path.read_bytes()
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Image processing failed: {e}")
+
+    storage_url = f"/uploads/{photo_id}.jpg"
 
     insert_photo(photo_id, user_id, storage_url)
 
-    # Run AI pipeline in background: YOLO → faces (CLIP) → scoring → CLIP image embed → store
-    background_tasks.add_task(run_pipeline, photo_id, user_id, storage_url, file_bytes)
+    # Background AI pipeline
+    background_tasks.add_task(
+        run_pipeline, photo_id, user_id, storage_url, compressed_bytes
+    )
 
     return {"photo_id": photo_id, "storage_url": storage_url, "message": "Uploaded."}
 
