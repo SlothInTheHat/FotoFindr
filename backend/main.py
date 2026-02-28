@@ -1,5 +1,7 @@
 import sys
 import uuid
+import json
+import asyncio
 import traceback
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -22,6 +24,7 @@ import io
 from backend.db import (
     init_db,
     insert_photo,
+    update_photo_pipeline_result,
     search_photos_by_vector,
     get_all_photos_for_user,
     get_people,
@@ -29,9 +32,10 @@ from backend.db import (
 )
 import backend.snowflake_db as sf_db
 from search.query import parse_filters
+from pipeline.objects import detect_objects
+from backend.pipeline.faces import get_face_emotions
 
 # from pipeline.clip_embed import embed_text_async
-# from pipeline.runner import run_pipeline
 
 # ── Storage ───────────────────────────────────────────────────────────────────
 
@@ -46,7 +50,6 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 async def lifespan(app: FastAPI):
     init_db()
     # Snowflake schema init runs in a thread (sync connector)
-    import asyncio
     asyncio.get_event_loop().run_in_executor(None, sf_db.init_schema)
     yield
 
@@ -61,6 +64,52 @@ app.add_middleware(
 )
 
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+
+# ── AI pipeline ───────────────────────────────────────────────────────────────
+
+
+async def _run_ai_pipeline(photo_id: str, image_path: Path) -> None:
+    """Run YOLO + DeepFace on the saved JPEG and persist results to both DBs."""
+    try:
+        image_bytes = image_path.read_bytes()
+    except Exception as e:
+        print(f"[pipeline] could not read {image_path}: {e}")
+        return
+
+    loop = asyncio.get_event_loop()
+
+    yolo_result, deepface_result = await asyncio.gather(
+        detect_objects(image_bytes),
+        loop.run_in_executor(None, get_face_emotions, str(image_path)),
+        return_exceptions=True,
+    )
+
+    # Serialize YOLO
+    if isinstance(yolo_result, Exception) or yolo_result is None:
+        print(f"[pipeline] yolo failed for {photo_id}: {yolo_result}")
+        yolo_json = "[]"
+    else:
+        yolo_json = json.dumps([{"label": o.label, "confidence": o.confidence} for o in yolo_result])
+
+    # Serialize DeepFace
+    if isinstance(deepface_result, Exception) or (isinstance(deepface_result, dict) and "error" in deepface_result):
+        print(f"[pipeline] deepface failed for {photo_id}: {deepface_result}")
+        deepface_json = "[]"
+    else:
+        deepface_json = json.dumps(deepface_result if isinstance(deepface_result, list) else [deepface_result])
+
+    result = {"detected_objects": yolo_json, "emotions": deepface_json}
+
+    try:
+        update_photo_pipeline_result(photo_id, result)
+    except Exception as e:
+        print(f"[pipeline] sqlite update failed for {photo_id}: {e}")
+
+    try:
+        sf_db.update_photo_pipeline_result(photo_id, result)
+    except Exception as e:
+        print(f"[pipeline] snowflake update failed for {photo_id}: {e}")
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -151,11 +200,7 @@ async def upload_photo(
     storage_url = f"/uploads/{photo_id}.jpg"
     insert_photo(photo_id, user_id, storage_url)
     background_tasks.add_task(sf_db.insert_photo, photo_id, device_uri or storage_url, user_id)
-
-    # Background AI pipeline
-    # background_tasks.add_task(
-    #     run_pipeline, photo_id, user_id, storage_url, compressed_bytes
-    # )
+    background_tasks.add_task(_run_ai_pipeline, photo_id, save_path)
 
     return {"photo_id": photo_id, "storage_url": storage_url, "message": "Uploaded."}
 
@@ -221,3 +266,16 @@ def list_profiles(user_id: str):
 def name_person_endpoint(person_id: str, body: NameRequest):
     name_person(person_id, body.name.strip())
     return {"ok": True, "person_id": person_id, "name": body.name.strip()}
+
+
+@app.post("/reprocess/{user_id}")
+async def reprocess_all(user_id: str, background_tasks: BackgroundTasks):
+    """Re-run YOLO + DeepFace on every stored photo for a user."""
+    photos = get_all_photos_for_user(user_id)
+    queued = 0
+    for photo in photos:
+        image_path = UPLOAD_DIR / f"{photo['id']}.jpg"
+        if image_path.exists():
+            background_tasks.add_task(_run_ai_pipeline, photo["id"], image_path)
+            queued += 1
+    return {"queued": queued, "total": len(photos)}
