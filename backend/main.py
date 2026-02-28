@@ -61,23 +61,25 @@ DEMO_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
 async def _startup_clear() -> None:
-    """On server start: wipe uploads folder + Snowflake so the mobile app
-    starts fresh. The mobile app re-uploads and calls /reprocess itself."""
-    # Clear local uploads
-    for f in UPLOAD_DIR.glob("*.jpg"):
-        try:
-            f.unlink()
-        except Exception:
-            pass
-    print(f"[startup] Uploads folder cleared.")
+    """On server start: clear Snowflake then repopulate from existing uploads."""
+    loop = asyncio.get_running_loop()
 
     # Clear Snowflake
-    loop = asyncio.get_running_loop()
     try:
         await loop.run_in_executor(None, sf_db.clear_photos, DEMO_USER_ID)
         print("[startup] Snowflake cleared for demo user.")
     except Exception as e:
         print(f"[startup] Snowflake clear failed (non-fatal): {e}")
+
+    # Repopulate from every photo already in SQLite + uploads folder
+    photos = get_all_photos_for_user(DEMO_USER_ID)
+    queued = 0
+    for photo in photos:
+        image_path = UPLOAD_DIR / f"{photo['id']}.jpg"
+        if image_path.exists():
+            asyncio.create_task(_run_ai_pipeline(photo["id"], image_path, photo))
+            queued += 1
+    print(f"[startup] Queued {queued}/{len(photos)} photos for AI pipeline.")
 
 
 @asynccontextmanager
