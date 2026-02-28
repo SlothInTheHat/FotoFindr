@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS people (
 def init_db() -> None:
     with _get_conn() as conn:
         conn.executescript(SCHEMA_SQL)
+        # Migrate: silently add columns that may be absent in older DBs
+        for col, defn in [
+            ("detected_objects", "TEXT DEFAULT '[]'"),
+            ("emotions",         "TEXT DEFAULT '[]'"),
+            ("person_ids",       "TEXT DEFAULT '[]'"),
+            ("importance_score", "REAL DEFAULT 1.0"),
+            ("low_value_flags",  "TEXT DEFAULT '[]'"),
+            ("embedding",        "TEXT DEFAULT NULL"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE photos ADD COLUMN {col} {defn}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
 
 # ---------------------------------------------------------------------------
@@ -148,12 +161,29 @@ def search_photos_by_vector(
             continue
 
         if filters:
+            # Filter: "me" / specific person_id must appear in photo's person_ids
+            if filters.get("person_id"):
+                pids_raw = d.get("person_ids", "[]")
+                pids = json.loads(pids_raw) if isinstance(pids_raw, str) else pids_raw
+                if filters["person_id"] not in pids:
+                    continue
+
+            # Filter: at least one object keyword must match a detected object label
+            if filters.get("objects"):
+                obj_raw = d.get("detected_objects", "[]")
+                objs = json.loads(obj_raw) if isinstance(obj_raw, str) else obj_raw
+                obj_labels = {o.get("label", "").lower() for o in objs if isinstance(o, dict)}
+                if not any(kw in obj_labels for kw in filters["objects"]):
+                    continue
+
+            # Filter: emotion
             if filters.get("emotion"):
                 emotions_raw = d.get("emotions", "[]")
                 emotions = json.loads(emotions_raw) if isinstance(emotions_raw, str) else emotions_raw
                 dominant_emotions = [e.get("dominant", "") for e in emotions if isinstance(e, dict)]
                 if filters["emotion"].lower() not in [e.lower() for e in dominant_emotions]:
                     continue
+
             if filters.get("exclude_low_value"):
                 score = d.get("importance_score", 1.0) or 1.0
                 if score < 0.4:

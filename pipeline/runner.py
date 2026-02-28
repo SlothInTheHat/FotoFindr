@@ -12,7 +12,7 @@ from pipeline.yolo_objects import detect_objects
 from pipeline.emotion import detect_emotions
 from pipeline.faces import detect_and_cluster_faces
 from pipeline.scoring import score_photo
-from search.embed import embed_text
+from pipeline.clip_embed import embed_image_async
 
 
 async def run_pipeline(photo_id: str, user_id: str, storage_url: str, image_bytes: bytes) -> None:
@@ -38,8 +38,8 @@ async def run_pipeline(photo_id: str, user_id: str, storage_url: str, image_byte
             emotion_task, faces_task, scoring_task
         )
 
-        # Embed caption for vector search
-        embedding = await embed_text(f"{caption} {' '.join(tags)}")
+        # CLIP image embedding — stored so text queries can rank images by cosine similarity
+        embedding = await embed_image_async(image_bytes)
 
         result = PipelineResult(
             photo_id=photo_id,

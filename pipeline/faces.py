@@ -1,17 +1,19 @@
 """
 Step 4 — Face detection + embedding generation.
-Uses MediaPipe for detection, Gemini for description + embedding.
+
+MediaPipe detects face bounding boxes; CLIP embeds the face crop.
+Using CLIP (not a dedicated face model) is good enough for demo clustering
+and requires no extra API key.
 """
 
 import asyncio
 import io
+
 import numpy as np
 from PIL import Image
-from google import genai
-from backend.config import settings
-from backend.db import get_or_create_person
 
-_client = genai.Client(api_key=settings.gemini_api_key)
+from backend.db import get_or_create_person
+from pipeline.clip_embed import embed_image
 
 
 def _detect_faces_mediapipe(image_bytes: bytes) -> list[bytes]:
@@ -25,7 +27,7 @@ def _detect_faces_mediapipe(image_bytes: bytes) -> list[bytes]:
     img_array = np.array(img)
     h, w = img_array.shape[:2]
 
-    face_crops = []
+    face_crops: list[bytes] = []
     with mp_face.FaceDetection(model_selection=1, min_detection_confidence=0.5) as detector:
         results = detector.process(img_array)
         if not results.detections:
@@ -46,33 +48,14 @@ def _detect_faces_mediapipe(image_bytes: bytes) -> list[bytes]:
     return face_crops
 
 
-async def _embed_face(face_bytes: bytes) -> list[float]:
-    from google.genai import types
-
-    image_part = types.Part.from_bytes(data=face_bytes, mime_type="image/jpeg")
-    desc_response = await asyncio.to_thread(
-        _client.models.generate_content,
-        model="gemini-1.5-flash",
-        contents=["Describe the face features in 1-2 sentences for identification.", image_part],
-    )
-    description = desc_response.text or "a person"
-
-    embed_response = await asyncio.to_thread(
-        _client.models.embed_content,
-        model="models/text-embedding-004",
-        contents=description,
-    )
-    return embed_response.embeddings[0].values
-
-
 async def detect_and_cluster_faces(image_bytes: bytes, user_id: str) -> list[str]:
     face_crops = _detect_faces_mediapipe(image_bytes)
     if not face_crops:
         return []
 
-    person_ids = []
+    person_ids: list[str] = []
     for face_bytes in face_crops:
-        embedding = await _embed_face(face_bytes)
+        embedding = await asyncio.to_thread(embed_image, face_bytes)
         person_id = get_or_create_person(user_id, embedding)
         person_ids.append(person_id)
 
