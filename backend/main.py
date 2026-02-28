@@ -146,6 +146,27 @@ def search_photos(req: SearchRequest):
     }
 
 
+@app.get("/photos/{user_id}")
+def get_recent_photos(user_id: str, limit: int = 10):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, user_id, storage_url, caption, tags, created_at FROM photos "
+            "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "user_id": r["user_id"],
+            "storage_url": r["storage_url"],
+            "caption": r["caption"] or "",
+            "tags": json.loads(r["tags"] or "[]"),
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
 @app.get("/profiles/{user_id}")
 def list_profiles(user_id: str):
     with get_conn() as conn:

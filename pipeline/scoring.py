@@ -64,9 +64,12 @@ def score_photo(image_bytes: bytes) -> tuple[float, list[str]]:
 
 
 def _laplacian_variance(gray: np.ndarray) -> float:
-    """Simple discrete Laplacian for blur detection."""
-    kernel = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.float32)
-    # Manual 2D convolution (small, fast enough for demo)
-    from scipy.signal import convolve2d
-    lap = convolve2d(gray, kernel, mode="valid")
+    """Simple discrete Laplacian for blur detection (numpy-only)."""
+    lap = (
+        gray[1:-1, 1:-1] * -4
+        + gray[0:-2, 1:-1]
+        + gray[2:,   1:-1]
+        + gray[1:-1, 0:-2]
+        + gray[1:-1, 2:]
+    )
     return float(lap.var())

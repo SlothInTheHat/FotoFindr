@@ -1,25 +1,50 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
   FlatList,
-  Image,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
   Alert,
 } from "react-native";
+import { Image } from "expo-image";
+import * as MediaLibrary from "expo-media-library";
 import * as ImagePicker from "expo-image-picker";
 import { API_BASE, DEMO_USER_ID } from "@/constants/api";
 
-type UploadedPhoto = {
-  photo_id: string;
-  storage_url: string;
+type LocalPhoto = {
+  id: string;
+  uri: string;
 };
 
-export default function UploadScreen() {
-  const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
+export default function CameraRollScreen() {
+  const [photos, setPhotos] = useState<LocalPhoto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [permissionDenied, setPermissionDenied] = useState(false);
   const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    loadCameraRoll();
+  }, []);
+
+  async function loadCameraRoll() {
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== "granted") {
+      setPermissionDenied(true);
+      setLoading(false);
+      return;
+    }
+
+    const { assets } = await MediaLibrary.getAssetsAsync({
+      mediaType: "photo",
+      first: 100,
+      sortBy: MediaLibrary.SortBy.creationTime,
+    });
+
+    setPhotos(assets.map((a) => ({ id: a.id, uri: a.uri })));
+    setLoading(false);
+  }
 
   async function pickAndUpload() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -52,18 +77,12 @@ export default function UploadScreen() {
           body: formData,
         });
         if (!resp.ok) throw new Error(await resp.text());
-        const data = await resp.json();
-        setPhotos((prev) => [{ photo_id: data.photo_id, storage_url: data.storage_url }, ...prev]);
       } catch (err: any) {
         Alert.alert("Upload failed", err.message);
       }
     }
     setUploading(false);
-  }
-
-  function getImageUrl(url: string) {
-    if (url.startsWith("http")) return url;
-    return `${API_BASE}${url}`;
+    Alert.alert("Done", "Photos sent to AI for indexing.");
   }
 
   return (
@@ -75,19 +94,25 @@ export default function UploadScreen() {
         {uploading ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.uploadBtnText}>+ Upload Photos</Text>
+          <Text style={styles.uploadBtnText}>Send to AI for Search</Text>
         )}
       </TouchableOpacity>
 
-      {photos.length === 0 ? (
-        <Text style={styles.empty}>Upload photos to get started.</Text>
+      {loading ? (
+        <ActivityIndicator color="#6c63ff" style={{ marginTop: 40 }} />
+      ) : permissionDenied ? (
+        <Text style={styles.empty}>
+          No photo access. Enable it in Settings → FotoFindr → Photos.
+        </Text>
+      ) : photos.length === 0 ? (
+        <Text style={styles.empty}>No photos found on this device.</Text>
       ) : (
         <FlatList
           data={photos}
-          keyExtractor={(item) => item.photo_id}
+          keyExtractor={(item) => item.id}
           numColumns={3}
           renderItem={({ item }) => (
-            <Image source={{ uri: getImageUrl(item.storage_url) }} style={styles.thumb} />
+            <Image source={{ uri: item.uri }} style={styles.thumb} />
           )}
           contentContainerStyle={styles.grid}
         />
@@ -108,7 +133,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   uploadBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  empty: { color: "#555", textAlign: "center", marginTop: 60, fontSize: 15 },
+  empty: { color: "#aaa", textAlign: "center", marginTop: 60, fontSize: 15 },
   grid: { gap: 2 },
   thumb: { flex: 1 / 3, aspectRatio: 1, margin: 1, borderRadius: 4 },
 });
