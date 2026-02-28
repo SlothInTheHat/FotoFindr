@@ -27,6 +27,7 @@ export default function CameraRollScreen() {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [indexDone, setIndexDone] = useState(0);
   const [indexTotal, setIndexTotal] = useState(0);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [stage, setStage] = useState<"idle" | "clearing" | "uploading" | "processing" | "ready">("idle");
 
   useEffect(() => {
