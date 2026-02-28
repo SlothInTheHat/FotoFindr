@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field
 class UploadResponse(BaseModel):
     photo_id: UUID
     storage_url: str
+    status: str = "processing"
+    modal_call_id: Optional[str] = None
     message: str = "Photo received. Processing has started."
 
 
@@ -32,6 +34,10 @@ class PhotoMetadata(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     user_id: UUID
     storage_url: str
+    status: str = "uploaded"
+    modal_call_id: Optional[str] = None
+    error_message: Optional[str] = None
+    status_updated_at: Optional[datetime] = None
     caption: Optional[str] = None
     tags: list[str] = []
     detected_objects: list[DetectedObject] = []
@@ -88,3 +94,12 @@ class PipelineResult(BaseModel):
     face_cluster_ids: list[UUID] = []
     importance_score: float = 1.0
     low_value_flags: list[str] = []
+
+
+class PhotoStatusResponse(BaseModel):
+    photo_id: UUID
+    user_id: UUID
+    status: str
+    modal_call_id: Optional[str] = None
+    error_message: Optional[str] = None
+    status_updated_at: Optional[datetime] = None

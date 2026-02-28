@@ -27,7 +27,9 @@ image = (
         "pgvector",
         "python-dotenv",
         "scipy",
+        "ultralytics"
     )
+    .run_commands('python -c "from ultralytics import YOLO; YOLO(\'yolov8n.pt\')"')
 )
 
 
@@ -38,15 +40,29 @@ async def process_photo(photo_id: str, user_id: str, storage_url: str) -> dict:
     Called by the FastAPI backend instead of BackgroundTasks when Modal is enabled.
     """
     import httpx
+    from backend.db import update_photo_status
     from pipeline.runner import run_pipeline
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(storage_url)
-        resp.raise_for_status()
-        image_bytes = resp.content
+    try:
+        update_photo_status(photo_id, "processing")
 
-    await run_pipeline(photo_id, user_id, storage_url, image_bytes)
-    return {"photo_id": photo_id, "status": "complete"}
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(storage_url)
+            resp.raise_for_status()
+            image_bytes = resp.content
+
+        await run_pipeline(
+            photo_id,
+            user_id,
+            storage_url,
+            image_bytes,
+            suppress_exceptions=False,
+        )
+        update_photo_status(photo_id, "completed", error_message=None)
+        return {"photo_id": photo_id, "status": "completed"}
+    except Exception as exc:
+        update_photo_status(photo_id, "failed", error_message=str(exc))
+        raise
 
 
 @app.local_entrypoint()

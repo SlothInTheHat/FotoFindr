@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS photos (
     id               TEXT PRIMARY KEY,
     user_id          TEXT NOT NULL,
     storage_url      TEXT NOT NULL,
+    status           TEXT DEFAULT 'uploaded',
+    modal_call_id    TEXT,
+    error_message    TEXT,
+    status_updated_at TEXT DEFAULT (datetime('now')),
     caption          TEXT,
     tags             TEXT DEFAULT '[]',
     detected_objects TEXT DEFAULT '[]',
@@ -64,9 +68,24 @@ CREATE TABLE IF NOT EXISTS people (
 """
 
 
+PHOTO_MIGRATIONS = {
+    "status": "ALTER TABLE photos ADD COLUMN status TEXT DEFAULT 'uploaded'",
+    "modal_call_id": "ALTER TABLE photos ADD COLUMN modal_call_id TEXT",
+    "error_message": "ALTER TABLE photos ADD COLUMN error_message TEXT",
+    "status_updated_at": "ALTER TABLE photos ADD COLUMN status_updated_at TEXT DEFAULT (datetime('now'))",
+}
+
+
 def init_db() -> None:
     with _get_conn() as conn:
         conn.executescript(SCHEMA_SQL)
+        cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(photos)").fetchall()
+        }
+        for col, stmt in PHOTO_MIGRATIONS.items():
+            if col not in cols:
+                conn.execute(stmt)
 
 
 # ---------------------------------------------------------------------------
@@ -74,12 +93,55 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 
-def insert_photo(photo_id: str, user_id: str, storage_url: str) -> None:
+def insert_photo(
+    photo_id: str,
+    user_id: str,
+    storage_url: str,
+    status: str = "uploaded",
+    modal_call_id: str | None = None,
+) -> None:
     with _get_conn() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO photos (id, user_id, storage_url) VALUES (?, ?, ?)",
-            (photo_id, user_id, storage_url),
+            """
+            INSERT OR IGNORE INTO photos (id, user_id, storage_url, status, modal_call_id, status_updated_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            """,
+            (photo_id, user_id, storage_url, status, modal_call_id),
         )
+
+
+def update_photo_status(
+    photo_id: str,
+    status: str,
+    *,
+    modal_call_id: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE photos
+            SET status = ?,
+                modal_call_id = COALESCE(?, modal_call_id),
+                error_message = ?,
+                status_updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (status, modal_call_id, error_message, photo_id),
+        )
+
+
+def get_photo_status(photo_id: str) -> dict | None:
+    with _get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT id, user_id, status, modal_call_id, error_message, status_updated_at
+            FROM photos
+            WHERE id = ?
+            """,
+            (photo_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def update_photo_pipeline_result(photo_id: str, result: dict) -> None:
@@ -97,7 +159,10 @@ def update_photo_pipeline_result(photo_id: str, result: dict) -> None:
                 person_ids       = ?,
                 importance_score = ?,
                 low_value_flags  = ?,
-                embedding        = ?
+                embedding        = ?,
+                status           = 'completed',
+                error_message    = NULL,
+                status_updated_at = datetime('now')
             WHERE id = ?
             """,
             (

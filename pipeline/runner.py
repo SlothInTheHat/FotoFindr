@@ -15,7 +15,13 @@ from pipeline.scoring import score_photo
 from search.embed import embed_text
 
 
-async def run_pipeline(photo_id: str, user_id: str, storage_url: str, image_bytes: bytes) -> None:
+async def run_pipeline(
+    photo_id: str,
+    user_id: str,
+    storage_url: str,
+    image_bytes: bytes,
+    suppress_exceptions: bool = True,
+) -> None:
     try:
         # Steps 1, 2, 5 can run in parallel (don't depend on each other)
         caption_task = asyncio.create_task(get_caption_and_tags(image_bytes))
@@ -66,3 +72,5 @@ async def run_pipeline(photo_id: str, user_id: str, storage_url: str, image_byte
     except Exception as exc:
         # Don't crash the server — log and move on
         print(f"[pipeline] ERROR for photo {photo_id}: {exc}")
+        if not suppress_exceptions:
+            raise
