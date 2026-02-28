@@ -48,3 +48,7 @@ yolov8n.pt
 # Ultralytics outputs (optional)
 runs/
 ultralytics/
+
+# Storage + Other
+backend/uploads/
+mobile/constants/api.ts
