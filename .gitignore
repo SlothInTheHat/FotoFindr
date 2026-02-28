@@ -35,3 +35,16 @@ Thumbs.db
 *.pem
 *.key
 serviceAccountKey.json
+.python-version
+
+# local tests / scratch
+test_yolo.py
+test_picture.png
+
+# YOLO weights
+yolov8n.pt
+*.pt
+
+# Ultralytics outputs (optional)
+runs/
+ultralytics/

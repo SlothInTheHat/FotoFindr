@@ -8,7 +8,7 @@ import json
 from backend.db import update_photo_pipeline_result
 from backend.models import PipelineResult
 from pipeline.caption import get_caption_and_tags
-from pipeline.objects import detect_objects
+from pipeline.yolo_objects import detect_objects
 from pipeline.emotion import detect_emotions
 from pipeline.faces import detect_and_cluster_faces
 from pipeline.scoring import score_photo
