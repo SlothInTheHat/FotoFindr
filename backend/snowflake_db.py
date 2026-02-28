@@ -64,12 +64,56 @@ def insert_photo(photo_id: str, device_uri: str, user_id: str) -> None:
             conn.cursor().execute(
                 """
                 INSERT INTO photos (ID, FILENAME, CREATED_AT, METADATA, YOLO_DATA, DEEPFACE_DATA)
-                VALUES (%s, %s, CURRENT_TIMESTAMP(), PARSE_JSON(%s), PARSE_JSON('[]'), PARSE_JSON('[]'))
+                SELECT %s, %s, CURRENT_TIMESTAMP(), PARSE_JSON(%s), PARSE_JSON('[]'), PARSE_JSON('[]')
                 """,
                 (photo_id, device_uri, metadata),
             )
+        print(f"[snowflake] insert_photo ok: {photo_id}")
     except Exception as e:
-        print(f"[snowflake] insert_photo failed (non-fatal): {e}")
+        print(f"[snowflake] insert_photo failed: {e}")
+
+
+def upsert_photo(photo_id: str, filename: str, result: dict) -> None:
+    """
+    UPDATE the row if it exists, INSERT if it doesn't.
+    Carries all metadata (user_id, caption, tags, …) plus YOLO and DeepFace data.
+    """
+    try:
+        metadata = json.dumps({
+            "user_id":          result.get("user_id", ""),
+            "caption":          result.get("caption"),
+            "tags":             result.get("tags", []),
+            "importance_score": result.get("importance_score", 1.0),
+            "low_value_flags":  result.get("low_value_flags", []),
+            "person_ids":       result.get("person_ids", []),
+        })
+        yolo_raw     = result.get("detected_objects", "[]")
+        deepface_raw = result.get("emotions", "[]")
+
+        with _get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE photos SET
+                    METADATA      = PARSE_JSON(%s),
+                    YOLO_DATA     = PARSE_JSON(%s),
+                    DEEPFACE_DATA = PARSE_JSON(%s)
+                WHERE ID = %s
+                """,
+                (metadata, yolo_raw, deepface_raw, photo_id),
+            )
+            if cur.rowcount == 0:
+                # Row didn't exist yet — insert it
+                cur.execute(
+                    """
+                    INSERT INTO photos (ID, FILENAME, CREATED_AT, METADATA, YOLO_DATA, DEEPFACE_DATA)
+                    SELECT %s, %s, CURRENT_TIMESTAMP(), PARSE_JSON(%s), PARSE_JSON(%s), PARSE_JSON(%s)
+                    """,
+                    (photo_id, filename, metadata, yolo_raw, deepface_raw),
+                )
+        print(f"[snowflake] upsert_photo ok: {photo_id}")
+    except Exception as e:
+        print(f"[snowflake] upsert_photo failed: {e}")
 
 
 def update_photo_pipeline_result(photo_id: str, result: dict) -> None:

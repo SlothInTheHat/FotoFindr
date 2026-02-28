@@ -3,6 +3,18 @@ import uuid
 import json
 import asyncio
 import traceback
+import numpy as np
+
+
+class _NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -30,7 +42,7 @@ from backend.db import (
     get_people,
     name_person,
 )
-import backend.snowflake_db as sf_db
+import backend.local_test_db as sf_db  # swap back to snowflake_db when ready
 from search.query import parse_filters
 from pipeline.objects import detect_objects
 from backend.pipeline.faces import get_face_emotions
@@ -49,8 +61,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # Snowflake schema init runs in a thread (sync connector)
-    asyncio.get_event_loop().run_in_executor(None, sf_db.init_schema)
+    sf_db.init_schema()
     yield
 
 
@@ -69,8 +80,13 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # ── AI pipeline ───────────────────────────────────────────────────────────────
 
 
-async def _run_ai_pipeline(photo_id: str, image_path: Path) -> None:
-    """Run YOLO + DeepFace on the saved JPEG and persist results to both DBs."""
+async def _run_ai_pipeline(photo_id: str, image_path: Path, photo_meta: dict | None = None) -> None:
+    """Run YOLO + DeepFace on the saved JPEG and persist results to both DBs.
+
+    photo_meta: existing SQLite record (user_id, storage_url, caption, tags, …).
+    When provided, all metadata is included in the Snowflake upsert so the row
+    is created if it doesn't exist yet.
+    """
     try:
         image_bytes = image_path.read_bytes()
     except Exception as e:
@@ -97,19 +113,31 @@ async def _run_ai_pipeline(photo_id: str, image_path: Path) -> None:
         print(f"[pipeline] deepface failed for {photo_id}: {deepface_result}")
         deepface_json = "[]"
     else:
-        deepface_json = json.dumps(deepface_result if isinstance(deepface_result, list) else [deepface_result])
+        deepface_json = json.dumps(deepface_result if isinstance(deepface_result, list) else [deepface_result], cls=_NumpyEncoder)
 
-    result = {"detected_objects": yolo_json, "emotions": deepface_json}
+    meta = photo_meta or {}
+    result = {
+        "detected_objects":  yolo_json,
+        "emotions":          deepface_json,
+        "user_id":           meta.get("user_id", ""),
+        "caption":           meta.get("caption"),
+        "tags":              meta.get("tags", []),
+        "importance_score":  meta.get("importance_score", 1.0),
+        "low_value_flags":   meta.get("low_value_flags", []),
+        "person_ids":        meta.get("person_ids", []),
+    }
 
     try:
         update_photo_pipeline_result(photo_id, result)
     except Exception as e:
         print(f"[pipeline] sqlite update failed for {photo_id}: {e}")
 
+    # Upsert to Snowflake — inserts the row if it doesn't exist yet, otherwise updates it.
+    filename = meta.get("storage_url", f"/uploads/{photo_id}.jpg")
     try:
-        sf_db.update_photo_pipeline_result(photo_id, result)
+        await loop.run_in_executor(None, sf_db.upsert_photo, photo_id, filename, result)
     except Exception as e:
-        print(f"[pipeline] snowflake update failed for {photo_id}: {e}")
+        print(f"[pipeline] snowflake upsert failed for {photo_id}: {e}")
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -131,6 +159,28 @@ class NameRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/test-snowflake")
+def test_snowflake():
+    try:
+        import snowflake.connector
+        from backend.config import settings
+        conn = snowflake.connector.connect(
+            account=settings.snowflake_account.replace("/", "-"),
+            user=settings.snowflake_user,
+            password=settings.snowflake_password,
+            database=settings.snowflake_database,
+            schema=settings.snowflake_schema,
+            warehouse=settings.snowflake_warehouse,
+        )
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM photos")
+        count = cur.fetchone()[0]
+        conn.close()
+        return {"status": "ok", "rows_in_photos": count}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
 
 
 @app.post("/upload/")
@@ -200,7 +250,10 @@ async def upload_photo(
     storage_url = f"/uploads/{photo_id}.jpg"
     insert_photo(photo_id, user_id, storage_url)
     background_tasks.add_task(sf_db.insert_photo, photo_id, device_uri or storage_url, user_id)
-    background_tasks.add_task(_run_ai_pipeline, photo_id, save_path)
+    background_tasks.add_task(
+        _run_ai_pipeline, photo_id, save_path,
+        {"user_id": user_id, "storage_url": storage_url},
+    )
 
     return {"photo_id": photo_id, "storage_url": storage_url, "message": "Uploaded."}
 
@@ -276,6 +329,6 @@ async def reprocess_all(user_id: str, background_tasks: BackgroundTasks):
     for photo in photos:
         image_path = UPLOAD_DIR / f"{photo['id']}.jpg"
         if image_path.exists():
-            background_tasks.add_task(_run_ai_pipeline, photo["id"], image_path)
+            background_tasks.add_task(_run_ai_pipeline, photo["id"], image_path, photo)
             queued += 1
     return {"queued": queued, "total": len(photos)}

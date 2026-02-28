@@ -53,3 +53,4 @@ ultralytics/
 backend/uploads/
 mobile/constants/api.ts
 fotofindr.db
+backend/snowflake_test.db
