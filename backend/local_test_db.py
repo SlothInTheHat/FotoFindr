@@ -86,6 +86,19 @@ def update_photo_pipeline_result(photo_id: str, result: dict) -> None:
     upsert_photo(photo_id, f"/uploads/{photo_id}.jpg", result)
 
 
+def clear_photos(user_id: str) -> None:
+    """Delete all photos for a user."""
+    try:
+        with _get_conn() as conn:
+            conn.execute(
+                "DELETE FROM photos WHERE json_extract(METADATA, '$.user_id') = ?",
+                (user_id,),
+            )
+        print(f"[local_test_db] clear_photos ok for user {user_id}")
+    except Exception as e:
+        print(f"[local_test_db] clear_photos failed: {e}")
+
+
 def dump_all() -> list[dict]:
     """Return all rows as dicts — useful for quick inspection."""
     with _get_conn() as conn:

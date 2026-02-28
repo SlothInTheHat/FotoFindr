@@ -154,3 +154,16 @@ def update_photo_pipeline_result(photo_id: str, result: dict) -> None:
             )
     except Exception as e:
         print(f"[snowflake] update_photo failed (non-fatal): {e}")
+
+
+def clear_photos(user_id: str) -> None:
+    """Delete all photos for a user — called before re-uploading on app startup."""
+    try:
+        with _get_conn() as conn:
+            conn.cursor().execute(
+                "DELETE FROM photos WHERE METADATA:user_id::STRING = %s",
+                (user_id,),
+            )
+        print(f"[snowflake] clear_photos ok for user {user_id}")
+    except Exception as e:
+        print(f"[snowflake] clear_photos failed: {e}")
