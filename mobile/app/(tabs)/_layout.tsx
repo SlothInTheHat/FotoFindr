@@ -26,20 +26,6 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="search"
-        options={{
-          title: "Search",
-          tabBarIcon: ({ color }) => <IconSymbol size={24} name="magnifyingglass" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="people"
-        options={{
-          title: "People",
-          tabBarIcon: ({ color }) => <IconSymbol size={24} name="person.2.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
         name="cleanup"
         options={{
           title: "Cleanup",

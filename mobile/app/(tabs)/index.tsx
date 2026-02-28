@@ -5,10 +5,12 @@ import {
   FlatList,
   StyleSheet,
   ActivityIndicator,
+  Pressable,
 } from "react-native";
 import { Image } from "expo-image";
 import * as MediaLibrary from "expo-media-library";
 import { API_BASE, DEMO_USER_ID } from "@/constants/api";
+import SearchBar from "@/components/ui/searchbar";
 
 const INDEX_LIMIT = 30; // index the N most recent photos on startup
 
@@ -56,6 +58,27 @@ export default function CameraRollScreen() {
     }
   }
 
+  async function loadMore() {
+    const { assets } = await MediaLibrary.getAssetsAsync({
+      mediaType: "photo",
+      first: indexTotal + 100,
+      sortBy: MediaLibrary.SortBy.creationTime,
+    });
+
+    setPhotos(assets.map((a) => ({ id: a.id, uri: a.uri })));
+
+    // Auto-index the next batch of photos
+    const toIndex = assets.slice(indexTotal, indexTotal + INDEX_LIMIT);
+    const prev = indexTotal;
+    setIndexTotal((prev) => prev + toIndex.length);
+
+    for (let i = prev; i < prev + INDEX_LIMIT; i += 3) {
+      const batch = toIndex.slice(i, i + 3);
+      await Promise.all(batch.map(uploadAsset));
+      setIndexDone((prev) => prev + batch.length);
+    }
+  }
+
   async function uploadAsset(asset: MediaLibrary.Asset) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
@@ -91,7 +114,7 @@ export default function CameraRollScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>FotoFindr</Text>
-
+      <SearchBar />
       {indexing && (
         <View style={styles.statusBar}>
           <ActivityIndicator size="small" color="#6c63ff" />
@@ -121,6 +144,14 @@ export default function CameraRollScreen() {
             <Image source={{ uri: item.uri }} style={styles.thumb} />
           )}
           contentContainerStyle={styles.grid}
+          ListFooterComponent={photos.length > 0 ? (
+            <Pressable onPress={loadMore}>
+              <Text style={styles.loadMoreButton}>
+                Load More
+              </Text>
+            </Pressable>
+          ) : null}
+          ListFooterComponentStyle={{ paddingBottom: 30 }}
         />
       )}
     </View>
@@ -136,4 +167,5 @@ const styles = StyleSheet.create({
   empty: { color: "#aaa", textAlign: "center", marginTop: 60, fontSize: 15 },
   grid: { gap: 2 },
   thumb: { flex: 1 / 3, aspectRatio: 1, margin: 1, borderRadius: 4 },
+  loadMoreButton: { color: "#6c63ff", textAlign: "center", marginTop: 16, fontSize: 14, fontWeight: "600" },
 });
