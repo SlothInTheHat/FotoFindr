@@ -8,7 +8,6 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from config import settings
 from db import get_photo_status, insert_photo, update_photo_status
-from infra.modal_worker import process_photo
 from models import PhotoStatusResponse, UploadResponse
 
 router = APIRouter()
@@ -123,6 +122,16 @@ async def upload_photo(
             status_code=500,
             error_code="PHOTO_INSERT_FAILED",
             message=f"Failed to create photo record: {exc}",
+        )
+
+    try:
+        from infra.modal_worker import process_photo
+    except Exception as exc:
+        update_photo_status(photo_id, "failed", error_message=f"modal_import_failed: {exc}")
+        _http_error(
+            status_code=503,
+            error_code="MODAL_NOT_AVAILABLE",
+            message=f"Modal worker is not available: {exc}",
         )
 
     try:

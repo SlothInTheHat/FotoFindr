@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
 
+    # Presage (emotion API, optional)
+    presage_api_key: str = ""
+    presage_api_url: str = "https://api.presage.io/v1/emotion"
+
     # Snowflake
     snowflake_account: str = ""
     snowflake_user: str = ""
