@@ -62,7 +62,6 @@ export default function UploadScreen() {
   }
 
   function getImageUrl(url: string) {
-    // url is like /uploads/xxx.jpg — prepend base
     if (url.startsWith("http")) return url;
     return `${API_BASE}${url}`;
   }
