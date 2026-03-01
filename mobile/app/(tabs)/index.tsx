@@ -24,7 +24,7 @@ export default function CameraRollScreen() {
   const [indexTotal, setIndexTotal] = useState(0);
   const [selectedImage, setSelectedImage] = useState<LocalPhoto | null>(null);
   const [stage, setStage] = useState<"idle" | "clearing" | "uploading" | "processing" | "ready">("idle");
-  const [filter, setFilter] = useState<string[]>([]);
+  const [searchResults, setSearchResults] = useState<LocalPhoto[] | null>(null);
 
   useEffect(() => {
     loadAndIndex();
@@ -166,7 +166,7 @@ export default function CameraRollScreen() {
 
   async function handleSearch(text: string): Promise<void> {
     if (text.trim() === "") {
-      setFilter([]);
+      setSearchResults(null);
       return;
     }
 
@@ -177,20 +177,16 @@ export default function CameraRollScreen() {
         body: JSON.stringify({ query: text, user_id: DEMO_USER_ID }),
       });
 
-      const data: {
-        ok: boolean;
-        photos: Array<{ metadata: any, id: string }>;
-      } = await response.json();
-
-      if (data.ok) {
-        const photoIds = data.photos
-          .map((photo) => photo.id)
-          .filter((id): id is string => !!id);
-
-        setFilter(photoIds);
-      }
-    } catch {
-      // Fail silently, filter won't update
+      const data = await response.json();
+      const results: LocalPhoto[] = (data.photos ?? []).map((p: any) => ({
+        assetId: p.id,
+        photoId: p.id,
+        uri: `${API_BASE}${p.storage_url}`,
+      }));
+      setSearchResults(results);
+      console.log(`[search] "${text}" → ${results.length} results, labels:`, data.matched_labels);
+    } catch (e) {
+      console.error("[search] failed:", e);
     }
   }
 
@@ -207,7 +203,12 @@ export default function CameraRollScreen() {
       ) : photos.length === 0 ? (
         <Text style={{ color: "#aaa", textAlign: "center", marginTop: 60, fontSize: 15 }}>No photos found on this device.</Text>
       ) : (
-        <PhotoGrid photos={photos} onPhotoPress={setSelectedImage} loadMore={loadMore} filter={filter} />
+        <PhotoGrid
+          photos={searchResults ?? photos}
+          onPhotoPress={setSelectedImage}
+          loadMore={searchResults ? () => {} : loadMore}
+          filter={[]}
+        />
       )}
 
       <PhotoModal
