@@ -7,7 +7,7 @@ import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from search import find_matches
 
@@ -230,7 +230,7 @@ def health():
 def test_snowflake():
     try:
         with engine.connect() as conn:
-            result = conn.execute("SELECT COUNT(*) FROM photos")
+            result = conn.execute(text("SELECT COUNT(*) FROM photos"))
         return {"status": "ok", "rows_in_photos": result.fetchone()[0]}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
@@ -311,10 +311,22 @@ async def search_photos(req: SearchRequest):
     user_id = req.user_id.strip()
     limit = req.limit
 
-    matches = find_matches(query, objects, emotions)
-    print(f"Matches for query '{query}': {matches}")
+    with engine.connect() as conn:
+        metadata_rows = conn.execute(text("SELECT * FROM METADATA")).fetchall()
+        yolo_rows = conn.execute(text("SELECT * FROM YOLO_DATA")).fetchall()
+        deepface_rows = conn.execute(text("SELECT * FROM DEEPFACE_DATA")).fetchall()
 
-    return {"ok": True, "received": req.query}
+        # print(metadata_rows)
+
+        # matches = find_matches(query, objects, emotions)
+        # print(f"Matches for query '{query}': {matches}")
+
+        return {
+            "ok": True,
+            "received": metadata_rows,
+            "yolo": yolo_rows,
+            "deepface": deepface_rows,
+        }
 
 
 @app.get("/photos/{user_id}")

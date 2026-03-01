@@ -13,7 +13,9 @@ def _get_model():
     return _model
 
 
-def find_matching_labels(query: str, object_labels: list[str], emotion_labels: list[str]) -> list[str]:
+def find_matching_labels(
+    query: str, object_labels: list[str], emotion_labels: list[str]
+) -> list[str]:
     """Ask Gemini which object/emotion labels match the user's query.
 
     Returns a list of matching label strings from the provided sets.
@@ -49,6 +51,7 @@ Example output: ["dog", "happy"]
     except Exception as e:
         print(f"[gemini] find_matching_labels error: {e}")
         return []
+
 
 def generate_description(image, objects, emotions):
 

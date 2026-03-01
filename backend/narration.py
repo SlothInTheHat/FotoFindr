@@ -15,6 +15,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 ELEVEN_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # You can change to preferred voice
 
+
 @router.post("/narrate/")
 def narrate_photo(device_uri: str = Form(...), user_id: str = Form(...)):
     # 1️⃣ Fetch photo data from Snowflake
@@ -22,14 +23,14 @@ def narrate_photo(device_uri: str = Form(...), user_id: str = Form(...)):
         cur = conn.cursor()
         cur.execute(
             "SELECT YOLO_DATA, DEEPFACE_DATA, METADATA FROM PHOTOS WHERE FILENAME = %s",
-            (device_uri,)
+            (device_uri,),
         )
         row = cur.fetchone()
         if not row:
             return {"error": "Photo not found"}
 
         yolo_data, deepface_data, metadata = row
-        objects = [o['label'] for o in yolo_data] if yolo_data else []
+        objects = [o["label"] for o in yolo_data] if yolo_data else []
         emotions = deepface_data if deepface_data else []
 
     # 2️⃣ Generate description via Gemini
@@ -41,14 +42,14 @@ def narrate_photo(device_uri: str = Form(...), user_id: str = Form(...)):
     data = {
         "voice": ELEVEN_VOICE_ID,
         "model": "eleven_multilingual_v1",
-        "text": description
+        "text": description,
     }
 
     r = requests.post(
         "https://api.elevenlabs.io/v1/text-to-speech",
         headers=headers,
         json=data,
-        stream=True
+        stream=True,
     )
     if r.status_code != 200:
         return {"error": "ElevenLabs TTS failed"}
@@ -59,4 +60,7 @@ def narrate_photo(device_uri: str = Form(...), user_id: str = Form(...)):
                 f.write(chunk)
 
     # 4️⃣ Return audio URL
-    return {"description": description, "audio_url": f"/uploads/narrations/{audio_path.name}"}
+    return {
+        "description": description,
+        "audio_url": f"/uploads/narrations/{audio_path.name}",
+    }
