@@ -41,6 +41,7 @@ from backend.db import (
     get_all_photos_for_user,
     get_people,
     name_person,
+    clear_user_photos,
 )
 import backend.snowflake_db as sf_db
 from search.query import parse_filters
@@ -210,10 +211,9 @@ def test_snowflake():
 
 @app.post("/upload/")
 async def upload_photo(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: str = Form(...),
-    device_uri: str = Form(default=""),  # original on-device URI (ph://, content://, …)
+    device_uri: str = Form(default=""),  # stored in Snowflake via /reprocess
     max_width: int = 1080,  # max width for resizing
     quality: int = 85,  # JPEG quality
 ):
@@ -274,11 +274,6 @@ async def upload_photo(
 
     storage_url = f"/uploads/{photo_id}.jpg"
     insert_photo(photo_id, user_id, storage_url)
-    background_tasks.add_task(sf_db.insert_photo, photo_id, device_uri or storage_url, user_id)
-    background_tasks.add_task(
-        _run_ai_pipeline, photo_id, save_path,
-        {"user_id": user_id, "storage_url": storage_url},
-    )
 
     return {"photo_id": photo_id, "storage_url": storage_url, "message": "Uploaded."}
 
@@ -347,10 +342,28 @@ def name_person_endpoint(person_id: str, body: NameRequest):
 
 
 @app.post("/clear/{user_id}")
-async def clear_user_photos(user_id: str):
-    """Delete all Snowflake rows for a user. Called by mobile app before re-uploading."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, sf_db.clear_photos, user_id)
+async def clear_endpoint(user_id: str):
+    """Clear uploads folder, SQLite, and Snowflake for a user. Called by mobile app before re-uploading."""
+    # Delete all uploaded files
+    for f in UPLOAD_DIR.glob("*.jpg"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+
+    # Clear SQLite
+    try:
+        clear_user_photos(user_id)
+    except Exception as e:
+        print(f"[clear] SQLite clear failed: {e}")
+
+    # Clear Snowflake
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, sf_db.clear_photos, user_id)
+    except Exception as e:
+        print(f"[clear] Snowflake clear failed: {e}")
+
     return {"ok": True, "user_id": user_id}
 
 

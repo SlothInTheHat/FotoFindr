@@ -87,6 +87,11 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 
+def clear_user_photos(user_id: str) -> None:
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM photos WHERE user_id = ?", (user_id,))
+
+
 def insert_photo(photo_id: str, user_id: str, storage_url: str) -> None:
     with _get_conn() as conn:
         conn.execute(
