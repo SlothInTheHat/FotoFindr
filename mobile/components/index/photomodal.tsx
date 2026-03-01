@@ -1,7 +1,10 @@
-import React from "react";
+// components/index/PhotoModal.tsx
+import React, { useState } from "react";
 import { View, Text, Modal, Pressable, StyleSheet } from "react-native";
 import { Image } from "expo-image";
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { Audio } from "expo-av";
+import { API_BASE, DEMO_USER_ID } from "@/constants/api";
 
 type Props = {
   visible: boolean;
@@ -11,7 +14,40 @@ type Props = {
 };
 
 export default function PhotoModal({ visible, imageUri, labels = [], onClose }: Props) {
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [loading, setLoading] = useState(false);
+
   if (!imageUri) return null;
+
+  async function handleNarrate() {
+    if (!imageUri) return;
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("device_uri", imageUri);
+      formData.append("user_id", DEMO_USER_ID);
+
+      const res = await fetch(`${API_BASE}/narrate/`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.audio_url) {
+        if (sound) {
+          await sound.unloadAsync();
+        }
+        const { sound: newSound } = await Audio.Sound.createAsync({
+          uri: `${API_BASE}${data.audio_url}`,
+        });
+        setSound(newSound);
+        await newSound.playAsync();
+      }
+    } catch (e) {
+      console.error("Narrate failed", e);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -26,9 +62,9 @@ export default function PhotoModal({ visible, imageUri, labels = [], onClose }: 
                 <Text key={idx} style={styles.label}>{label}</Text>
               ))}
             </View>
-            <Pressable style={styles.narrateButton}>
+            <Pressable style={styles.narrateButton} onPress={handleNarrate}>
               <IconSymbol size={14} name="speaker.wave.2" color="#ddd" />
-              <Text style={styles.narrateButtonText}>Narrate</Text>
+              <Text style={styles.narrateButtonText}>{loading ? "Loading..." : "Narrate"}</Text>
             </Pressable>
           </View>
         </View>
