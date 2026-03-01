@@ -61,33 +61,10 @@ DEMO_USER_ID = "00000000-0000-0000-0000-000000000001"
 # ── App ───────────────────────────────────────────────────────────────────────
 
 
-async def _startup_clear() -> None:
-    """On server start: clear Snowflake then repopulate from existing uploads."""
-    loop = asyncio.get_running_loop()
-
-    # Clear Snowflake
-    try:
-        await loop.run_in_executor(None, sf_db.clear_photos, DEMO_USER_ID)
-        print("[startup] Snowflake cleared for demo user.")
-    except Exception as e:
-        print(f"[startup] Snowflake clear failed (non-fatal): {e}")
-
-    # Repopulate from every photo already in SQLite + uploads folder
-    photos = get_all_photos_for_user(DEMO_USER_ID)
-    queued = 0
-    for photo in photos:
-        image_path = UPLOAD_DIR / f"{photo['id']}.jpg"
-        if image_path.exists():
-            asyncio.create_task(_run_ai_pipeline(photo["id"], image_path, photo))
-            queued += 1
-    print(f"[startup] Queued {queued}/{len(photos)} photos for AI pipeline.")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     sf_db.init_schema()
-    asyncio.create_task(_startup_clear())
     yield
 
 
@@ -377,4 +354,5 @@ async def reprocess_all(user_id: str, background_tasks: BackgroundTasks):
         if image_path.exists():
             background_tasks.add_task(_run_ai_pipeline, photo["id"], image_path, photo)
             queued += 1
+    print(f"[reprocess] Queued {queued}/{len(photos)} photos for user {user_id}")
     return {"queued": queued, "total": len(photos)}

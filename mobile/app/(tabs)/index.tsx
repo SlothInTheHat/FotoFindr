@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
 } from "react-native";
 import * as MediaLibrary from "expo-media-library";
 import { API_BASE, DEMO_USER_ID } from "@/constants/api";
@@ -75,6 +76,16 @@ export default function CameraRollScreen() {
     setStage("ready");
   }
 
+  async function triggerReprocess() {
+    try {
+      const res = await fetch(`${API_BASE}/reprocess/${DEMO_USER_ID}`, { method: "POST" });
+      const data = await res.json();
+      console.log("[reprocess]", data);
+    } catch (e) {
+      console.error("[reprocess] failed", e);
+    }
+  }
+
   async function loadMore() {
     const { assets } = await MediaLibrary.getAssetsAsync({
       mediaType: "photo",
@@ -130,6 +141,10 @@ export default function CameraRollScreen() {
       <Text style={{ fontSize: 28, fontWeight: "700", color: "#fff", textAlign: "center", marginBottom: 8 }}>FotoFindr</Text>
 
       <StatusBar stage={stage} indexDone={indexDone} indexTotal={indexTotal} />
+
+      <Pressable onPress={triggerReprocess} style={{ backgroundColor: "#6c63ff", padding: 10, borderRadius: 8, marginBottom: 8, alignItems: "center" }}>
+        <Text style={{ color: "#fff", fontWeight: "600" }}>Run AI Pipeline</Text>
+      </Pressable>
 
       {loading ? (
         <ActivityIndicator color="#6c63ff" style={{ marginTop: 40 }} />
