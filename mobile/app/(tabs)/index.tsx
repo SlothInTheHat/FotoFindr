@@ -33,6 +33,24 @@ export default function CameraRollScreen() {
     loadAndIndex();
   }, []);
 
+  async function pollUntilReady(expected: number) {
+    const maxWait = 120_000; // 2 minutes max
+    const interval = 3_000;
+    const deadline = Date.now() + maxWait;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, interval));
+      try {
+        const res = await fetch(`${API_BASE}/status/${DEMO_USER_ID}`);
+        const { processed, total } = await res.json();
+        console.log(`[status] ${processed}/${total} processed`);
+        if (total > 0 && processed >= total) return;
+      } catch (e) {
+        console.warn("[status] poll failed:", e);
+      }
+    }
+    console.warn("[status] timed out waiting for pipeline");
+  }
+
   async function loadAndIndex() {
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== "granted") {
@@ -70,9 +88,15 @@ export default function CameraRollScreen() {
     // 3. Trigger AI pipeline on all uploaded photos
     setStage("processing");
     try {
-      await fetch(`${API_BASE}/reprocess/${DEMO_USER_ID}`, { method: "POST" });
-    } catch { /* ignore */ }
+      const res = await fetch(`${API_BASE}/reprocess/${DEMO_USER_ID}`, { method: "POST" });
+      const data = await res.json();
+      console.log("[reprocess] triggered:", data);
+    } catch (e) {
+      console.error("[reprocess] failed:", e);
+    }
 
+    // 4. Poll /status until all photos are processed
+    await pollUntilReady(toIndex.length);
     setStage("ready");
   }
 

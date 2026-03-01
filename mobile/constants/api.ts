@@ -2,10 +2,16 @@ import Constants from "expo-constants";
 
 function getApiBase(): string {
   if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
-  // Reuse the IP Expo already knows (e.g. "10.195.25.243:8081" → backend on :8080)
-  const host = Constants.expoConfig?.hostUri?.split(":")[0];
-  if (host) return `http://${host}:8080`;
-  return "http://localhost:8080";
+
+  // Try every field Expo has used across SDK versions
+  const host =
+    Constants.expoConfig?.hostUri?.split(":")[0] ||
+    (Constants.manifest as any)?.debuggerHost?.split(":")[0] ||
+    (Constants.manifest2 as any)?.extra?.expoGo?.debuggerHost?.split(":")[0];
+
+  const base = host ? `http://${host}:8080` : "http://localhost:8080";
+  console.log("[api] API_BASE:", base, "| raw hostUri:", Constants.expoConfig?.hostUri);
+  return base;
 }
 
 export const API_BASE = getApiBase();

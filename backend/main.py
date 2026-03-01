@@ -4,12 +4,12 @@ import json
 import asyncio
 import traceback
 import numpy as np
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine, text
+# from sqlalchemy import create_engine, text
 
-from search import find_matches
+# from search import find_matches
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -50,7 +50,10 @@ from db import (
     get_people,
     name_person,
     clear_user_photos,
+    get_pipeline_status,
 )
+from gemini_service import find_matching_labels
+from narration import router as narration_router
 import snowflake_db as sf_db
 from pipeline.objects import detect_objects
 from backend.pipeline.faces import get_face_emotions
@@ -62,6 +65,8 @@ import snowflake.connector
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+NARRATION_DIR = Path("uploads/narrations")
+NARRATION_DIR.mkdir(parents=True, exist_ok=True)
 
 DEMO_USER_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -85,40 +90,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/uploads/narrations", StaticFiles(directory="uploads/narrations"), name="narrations")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.include_router(narration_router)
 
 
 # ── AI pipeline ───────────────────────────────────────────────────────────────
-
-
-# backend/main.py
-# Add near the top
-from backend.narration import router as narration_router
-
-# After mounting /uploads for images, also mount narrations
-app.mount(
-    "/uploads/narrations",
-    StaticFiles(directory="uploads/narrations"),
-    name="narrations",
-)
-
-# Include the router
-app.include_router(narration_router)
-
-
-# backend/main.py
-# Add near the top
-from backend.narration import router as narration_router
-
-# After mounting /uploads for images, also mount narrations
-app.mount(
-    "/uploads/narrations",
-    StaticFiles(directory="uploads/narrations"),
-    name="narrations",
-)
-
-# Include the router
-app.include_router(narration_router)
 
 
 async def _run_ai_pipeline(
@@ -196,6 +173,7 @@ async def _run_ai_pipeline(
 class SearchRequest(BaseModel):
     query: str
     user_id: str
+    limit: int = 20
 
 
 class NameRequest(BaseModel):
@@ -205,19 +183,19 @@ class NameRequest(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
-conn = snowflake.connector.connect(
-    account=settings.snowflake_account.replace("/", "-"),
-    user=settings.snowflake_user,
-    password=settings.snowflake_password,
-    database=settings.snowflake_database,
-    schema=settings.snowflake_schema,
-    warehouse=settings.snowflake_warehouse,
-)
+# conn = snowflake.connector.connect(
+#     account=settings.snowflake_account.replace("/", "-"),
+#     user=settings.snowflake_user,
+#     password=settings.snowflake_password,
+#     database=settings.snowflake_database,
+#     schema=settings.snowflake_schema,
+#     warehouse=settings.snowflake_warehouse,
+# )
 
-engine = create_engine(
-    f"snowflake://{settings.snowflake_account.replace('/', '-')}.snowflakecomputing.com",
-    creator=lambda: conn,
-)
+# engine = create_engine(
+#     f"snowflake://{settings.snowflake_account.replace('/', '-')}.snowflakecomputing.com",
+#     creator=lambda: conn,
+# )
 
 
 @app.get("/health")
@@ -225,14 +203,14 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/test-snowflake")
-def test_snowflake():
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT COUNT(*) FROM photos"))
-        return {"status": "ok", "rows_in_photos": result.fetchone()[0]}
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+# @app.get("/test-snowflake")
+# def test_snowflake():
+#     try:
+#         with engine.connect() as conn:
+#             result = conn.execute(text("SELECT COUNT(*) FROM photos"))
+#         return {"status": "ok", "rows_in_photos": result.fetchone()[0]}
+#     except Exception as e:
+#         return {"status": "error", "detail": str(e)}
 
 
 @app.post("/upload/")
@@ -304,105 +282,7 @@ async def upload_photo(
     return {"photo_id": photo_id, "storage_url": storage_url, "message": "Uploaded."}
 
 
-@app.post("/search/")
-async def search_photos(req: SearchRequest):
-    query = req.query.strip()
-    user_id = req.user_id.strip()
-
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("SELECT metadata, yolo_data, deepface_data FROM PHOTOS")
-        ).fetchall()
-
-    photos = []
-    all_objects = set()
-    all_emotions = set()
-
-    for row in result:
-        # Metadata
-        try:
-            meta = json.loads(row.metadata)
-        except (TypeError, json.JSONDecodeError):
-            meta = {}
-
-        # YOLO labels
-        try:
-            yolo_objs = json.loads(row.yolo_data)
-            yolo_labels = [obj["label"] for obj in yolo_objs]
-        except (TypeError, json.JSONDecodeError, KeyError):
-            yolo_labels = []
-
-        # DeepFace emotions
-        try:
-            df_objs = json.loads(row.deepface_data)
-            dominant_emotions = [
-                obj["dominant_emotion"] for obj in df_objs if "dominant_emotion" in obj
-            ]
-        except (TypeError, json.JSONDecodeError, KeyError):
-            dominant_emotions = []
-
-        # Collect all objects and emotions seen so far
-        all_objects.update(yolo_labels)
-        all_emotions.update(dominant_emotions)
-
-        photos.append(
-            {
-                "metadata": meta,
-                "yolo_labels": yolo_labels,
-                "dominant_emotions": dominant_emotions,
-            }
-        )
-
-    # 2️⃣ Ask Gemini which objects/emotions match query
-    matched_labels = find_matches(query, list(all_objects), list(all_emotions))
-
-    # 3️⃣ Filter photos: keep those that have at least one matching label
-    filtered_photos = []
-    for photo in photos:
-        labels_in_photo = set(photo["yolo_labels"] + photo["dominant_emotions"])
-        if labels_in_photo & set(matched_labels):
-            filtered_photos.append(photo)
-
-    return {
-        "ok": True,
-        "query": query,
-        "matched_labels": matched_labels,
-        "photos": filtered_photos,
-    }
-
-
-@app.get("/image_labels/")
-def get_image_labels(image_id: str = Query(..., description="The ID of the image")):
-    """
-    Returns all YOLO object labels and DeepFace dominant emotions for a given image.
-    """
-    query = text("SELECT yolo_data, deepface_data FROM PHOTOS WHERE id = :image_id")
-
-    with engine.connect() as conn:
-        result = conn.execute(query, {"image_id": image_id}).fetchone()
-
-    if not result:
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    labels = []
-
-    # Parse YOLO labels
-    try:
-        yolo_objs = json.loads(result.yolo_data)
-        labels.extend([obj["label"] for obj in yolo_objs])
-    except (TypeError, json.JSONDecodeError, KeyError):
-        pass
-
-    # Parse DeepFace dominant emotions
-    try:
-        df_objs = json.loads(result.deepface_data)
-        labels.extend(
-            [obj["dominant_emotion"] for obj in df_objs if "dominant_emotion" in obj]
-        )
-    except (TypeError, json.JSONDecodeError, KeyError):
-        pass
-
-    return {"image_id": image_id, "labels": labels}
+# Stray duplicate /search/ and /image_labels/ endpoints removed (used old SQLAlchemy engine)
 
 
 @app.get("/photos/{user_id}")
@@ -453,6 +333,51 @@ async def clear_endpoint(user_id: str):
         print(f"[clear] Snowflake clear failed: {e}")
 
     return {"ok": True, "user_id": user_id}
+
+
+@app.get("/status/{user_id}")
+async def pipeline_status(user_id: str):
+    """Returns how many photos have been processed by the AI pipeline."""
+    return get_pipeline_status(user_id)
+
+
+@app.post("/search/")
+async def search_photos(req: SearchRequest):
+    """Gemini-powered semantic search over detected objects and emotions."""
+    all_photos = get_all_photos_for_user(req.user_id)
+
+    object_labels: set[str] = set()
+    emotion_labels: set[str] = set()
+    for p in all_photos:
+        for obj in (p.get("detected_objects") or []):
+            if isinstance(obj, dict) and obj.get("label"):
+                object_labels.add(obj["label"].lower())
+        for face in (p.get("emotions") or []):
+            if isinstance(face, dict) and face.get("dominant_emotion"):
+                emotion_labels.add(face["dominant_emotion"].lower())
+
+    loop = asyncio.get_running_loop()
+    matching = await loop.run_in_executor(
+        None, find_matching_labels, req.query, list(object_labels), list(emotion_labels)
+    )
+    matching_set = {m.lower() for m in matching}
+
+    if matching_set:
+        photos = [
+            p for p in all_photos
+            if any(
+                isinstance(obj, dict) and obj.get("label", "").lower() in matching_set
+                for obj in (p.get("detected_objects") or [])
+            )
+            or any(
+                isinstance(face, dict) and face.get("dominant_emotion", "").lower() in matching_set
+                for face in (p.get("emotions") or [])
+            )
+        ]
+    else:
+        photos = all_photos
+
+    return {"photos": photos[:req.limit], "matched_labels": list(matching_set)}
 
 
 @app.post("/reprocess/{user_id}")

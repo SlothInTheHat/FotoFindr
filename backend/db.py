@@ -204,6 +204,18 @@ def search_photos_by_vector(
     return [_row_to_dict(d) for d in scored[:limit]]
 
 
+def get_pipeline_status(user_id: str) -> dict:
+    with _get_conn() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM photos WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+        processed = conn.execute(
+            "SELECT COUNT(*) FROM photos WHERE user_id = ? AND detected_objects IS NOT NULL",
+            (user_id,),
+        ).fetchone()[0]
+    return {"processed": processed, "total": total}
+
+
 def get_all_photos_for_user(user_id: str) -> list[dict]:
     with _get_conn() as conn:
         rows = conn.execute(
