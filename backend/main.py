@@ -203,9 +203,9 @@ def health():
 async def upload_photo(
     file: UploadFile = File(...),
     user_id: str = Form(...),
-    device_uri: str = Form(default=""),
-    max_width: int = 1080,
-    quality: int = 85,
+    device_uri: str = Form(default=""),  # stored in Snowflake via /reprocess
+    max_width: int = 1080,  # max width for resizing
+    quality: int = 85,  # JPEG quality
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=415, detail="Only image files accepted.")
@@ -218,6 +218,7 @@ async def upload_photo(
     save_path = UPLOAD_DIR / f"{photo_id}.jpg"
 
     try:
+        # Detect HEIC/HEIF and convert
         if file.content_type in [
             "image/heic",
             "image/heif",
@@ -227,6 +228,7 @@ async def upload_photo(
         else:
             img = Image.open(io.BytesIO(file_bytes))
 
+        # Fix orientation based on EXIF
         try:
             for orientation in ExifTags.TAGS.keys():
                 if ExifTags.TAGS[orientation] == "Orientation":
@@ -243,21 +245,24 @@ async def upload_photo(
         except Exception:
             pass
 
+        # Convert to RGB for JPEG
         if img.mode != "RGB":
             img = img.convert("RGB")
 
+        # Resize while keeping aspect ratio
         if img.width > max_width:
             ratio = max_width / img.width
             new_height = int(img.height * ratio)
             img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
 
+        # Save as JPEG
         img.save(save_path, format="JPEG", quality=quality, optimize=True)
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Image processing failed: {e}")
 
     storage_url = f"/uploads/{photo_id}.jpg"
-    insert_photo(photo_id, user_id, storage_url, device_uri)
+    insert_photo(photo_id, user_id, storage_url)
 
     return {"photo_id": photo_id, "storage_url": storage_url, "message": "Uploaded."}
 
