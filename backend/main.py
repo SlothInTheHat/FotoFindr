@@ -91,34 +91,34 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # ── AI pipeline ───────────────────────────────────────────────────────────────
 
 
-# backend/main.py
-# Add near the top
-from backend.narration import router as narration_router
+# # backend/main.py
+# # Add near the top
+# from backend.narration import router as narration_router
 
-# After mounting /uploads for images, also mount narrations
-app.mount(
-    "/uploads/narrations",
-    StaticFiles(directory="uploads/narrations"),
-    name="narrations",
-)
-
-# Include the router
-app.include_router(narration_router)
-
-
-# backend/main.py
-# Add near the top
-from backend.narration import router as narration_router
-
-# After mounting /uploads for images, also mount narrations
-app.mount(
-    "/uploads/narrations",
-    StaticFiles(directory="uploads/narrations"),
-    name="narrations",
-)
+# # After mounting /uploads for images, also mount narrations
+# app.mount(
+#     "/uploads/narrations",
+#     StaticFiles(directory="uploads/narrations"),
+#     name="narrations",
+# )
 
 # Include the router
-app.include_router(narration_router)
+# app.include_router(narration_router)
+
+
+# # backend/main.py
+# # Add near the top
+# from backend.narration import router as narration_router
+
+# # After mounting /uploads for images, also mount narrations
+# app.mount(
+#     "/uploads/narrations",
+#     StaticFiles(directory="uploads/narrations"),
+#     name="narrations",
+# )
+
+# # Include the router
+# app.include_router(narration_router)
 
 
 async def _run_ai_pipeline(
