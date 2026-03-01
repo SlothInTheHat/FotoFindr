@@ -12,12 +12,17 @@ type Props = {
   photos: LocalPhoto[];
   onPhotoPress: (photoId: LocalPhoto) => void;
   loadMore: () => void;
+  filter: string[];
 };
 
-export default function PhotoGrid({ photos, onPhotoPress, loadMore }: Props) {
+export default function PhotoGrid({ photos, onPhotoPress, loadMore, filter }: Props) {
+  const filteredPhotos = filter.length > 0
+    ? photos.filter(photo => filter.includes(photo.photoId!))
+    : photos;
+
   return (
     <FlatList
-      data={photos}
+      data={filteredPhotos}
       keyExtractor={(item) => item.assetId}
       numColumns={3}
       renderItem={({ item }) => (

@@ -90,6 +90,7 @@ export default function PhotoModal({ visible, imageData, onClose }: Props) {
     </Modal>
   );
 }
+
 interface ImageLabelsResponse {
   image_id: string;
   labels: string[];

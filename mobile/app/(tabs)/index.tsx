@@ -24,6 +24,7 @@ export default function CameraRollScreen() {
   const [indexTotal, setIndexTotal] = useState(0);
   const [selectedImage, setSelectedImage] = useState<LocalPhoto | null>(null);
   const [stage, setStage] = useState<"idle" | "clearing" | "uploading" | "processing" | "ready">("idle");
+  const [filter, setFilter] = useState<string[]>([]);
 
   useEffect(() => {
     loadAndIndex();
@@ -163,6 +164,36 @@ export default function CameraRollScreen() {
     }
   }
 
+  async function handleSearch(text: string): Promise<void> {
+    if (text.trim() === "") {
+      setFilter([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/search/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: text, user_id: DEMO_USER_ID }),
+      });
+
+      const data: {
+        ok: boolean;
+        photos: Array<{ metadata: any }>;
+      } = await response.json();
+
+      if (data.ok) {
+        const photoIds = data.photos
+          .map((photo) => photo.metadata?.id)
+          .filter((id): id is string => !!id);
+
+        setFilter(photoIds);
+      }
+    } catch {
+      // Fail silently, filter won't update
+    }
+  }
+
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: "#0a0a0a", paddingTop: 60, paddingHorizontal: 16 }}>
       <Text style={{ fontSize: 28, fontWeight: "700", color: "#fff", textAlign: "center", marginBottom: 8 }}>FotoFindr</Text>
@@ -180,7 +211,7 @@ export default function CameraRollScreen() {
       ) : photos.length === 0 ? (
         <Text style={{ color: "#aaa", textAlign: "center", marginTop: 60, fontSize: 15 }}>No photos found on this device.</Text>
       ) : (
-        <PhotoGrid photos={photos} onPhotoPress={setSelectedImage} loadMore={loadMore} />
+        <PhotoGrid photos={photos} onPhotoPress={setSelectedImage} loadMore={loadMore} filter={filter} />
       )}
 
       <PhotoModal
@@ -190,7 +221,7 @@ export default function CameraRollScreen() {
         onClose={() => setSelectedImage(null)}
       />
 
-      <SearchBar />
+      <SearchBar onSearch={handleSearch} />
     </KeyboardAvoidingView>
   );
 }

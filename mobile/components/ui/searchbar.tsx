@@ -1,15 +1,27 @@
 import { View, TextInput, Pressable, StyleSheet } from "react-native";
 import { IconSymbol } from "./icon-symbol";
+import { useState } from "react";
 
-export default function SearchBar() {
+export default function SearchBar({ onSearch }: { onSearch: (text: string) => void }) {
+    const [textValue, setTextValue] = useState("");
+
     return (
         <View style={styles.searchBox}>
             <TextInput
                 placeholder="Search photos..."
                 placeholderTextColor="#666"
                 style={styles.input}
+                value={textValue}
+                onChangeText={setTextValue}
+                onSubmitEditing={(e) => onSearch(e.nativeEvent.text)}
             />
-            <Pressable onPress={() => { }} style={styles.searchButton}>
+            <Pressable
+                onPress={() => onSearch(textValue)}
+                style={({ pressed }) => [
+                    styles.searchButton,
+                    { opacity: pressed ? 0.6 : 1 }
+                ]}
+            >
                 <IconSymbol size={14} name="magnifyingglass" color={"#666"} />
             </Pressable>
         </View>
