@@ -3,47 +3,34 @@ import {
   View,
   Text,
   FlatList,
-  Image,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
   Alert,
 } from "react-native";
+import { Image } from "expo-image";
 import { useFocusEffect } from "expo-router";
+import * as MediaLibrary from "expo-media-library";
 import { API_BASE, DEMO_USER_ID } from "@/constants/api";
 
-type Photo = {
+type UntaggedPhoto = {
   id: string;
   storage_url: string;
-  caption?: string;
-  importance_score?: number;
-  low_value_flags?: string[];
+  device_uri?: string;
 };
 
 export default function CleanupScreen() {
-  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [photos, setPhotos] = useState<UntaggedPhoto[]>([]);
   const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
-  const fetchLowValuePhotos = useCallback(async () => {
+  const fetchUntagged = useCallback(async () => {
     setLoading(true);
     try {
-      // Search for low-value photos using a generic query with exclude_low_value=false approach
-      const resp = await fetch(`${API_BASE}/search/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: "screenshot blurry dark duplicate low quality",
-          user_id: DEMO_USER_ID,
-          limit: 50,
-        }),
-      });
-      if (!resp.ok) throw new Error(await resp.text());
-      const data = await resp.json();
-      // Show only low-importance photos
-      const lowValue = (data.photos as Photo[]).filter(
-        (p) => (p.importance_score ?? 1) < 0.5 || (p.low_value_flags ?? []).length > 0
-      );
-      setPhotos(lowValue);
+      const res = await fetch(`${API_BASE}/untagged/${DEMO_USER_ID}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setPhotos(data.photos ?? []);
     } catch (err: any) {
       Alert.alert("Error", err.message);
     } finally {
@@ -53,40 +40,67 @@ export default function CleanupScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      fetchLowValuePhotos();
-    }, [fetchLowValuePhotos])
+      fetchUntagged();
+    }, [fetchUntagged])
   );
 
-  function getImageUrl(url: string) {
-    if (url.startsWith("http")) return url;
-    return `${API_BASE}${url}`;
-  }
-
-  function confirmDelete(photo: Photo) {
+  async function handleDelete(photo: UntaggedPhoto) {
     Alert.alert(
       "Delete photo?",
-      "Remove this low-quality photo from your roll?",
+      "This will remove the photo from your device.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => setPhotos((prev) => prev.filter((p) => p.id !== photo.id)),
+          onPress: () => deletePhoto(photo),
         },
       ]
     );
   }
 
+  async function deletePhoto(photo: UntaggedPhoto) {
+    setDeleting(photo.id);
+    try {
+      // Extract asset ID from device_uri (e.g. "ph://ASSET_ID" on iOS)
+      const deviceUri = photo.device_uri ?? "";
+      const assetId = deviceUri.startsWith("ph://")
+        ? deviceUri.slice(5)
+        : deviceUri;
+
+      if (assetId) {
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status === "granted") {
+          await MediaLibrary.deleteAssetsAsync([assetId]);
+        }
+      }
+
+      // Remove from local state regardless
+      setPhotos((prev) => prev.filter((p) => p.id !== photo.id));
+    } catch (e: any) {
+      Alert.alert("Delete failed", e.message ?? "Could not delete photo.");
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  function imageUrl(storage_url: string) {
+    if (storage_url.startsWith("http")) return storage_url;
+    return `${API_BASE}${storage_url}`;
+  }
+
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Cleanup</Text>
-      <Text style={styles.subtitle}>Low-value photos detected by AI</Text>
+      <Text style={styles.title}>Untagged Photos</Text>
+      <Text style={styles.subtitle}>
+        {photos.length} photo{photos.length !== 1 ? "s" : ""} with no detected content
+      </Text>
 
       {loading && <ActivityIndicator color="#6c63ff" style={{ marginTop: 30 }} />}
 
       {!loading && photos.length === 0 && (
         <Text style={styles.empty}>
-          No low-value photos found.{"\n"}Great — your camera roll looks clean!
+          No untagged photos.{"\n"}All processed photos have detected content.
         </Text>
       )}
 
@@ -96,17 +110,19 @@ export default function CleanupScreen() {
         numColumns={2}
         renderItem={({ item }) => (
           <View style={styles.card}>
-            <Image source={{ uri: getImageUrl(item.storage_url) }} style={styles.thumb} />
-            <View style={styles.infoRow}>
-              <Text style={styles.score}>
-                Score: {((item.importance_score ?? 1) * 100).toFixed(0)}%
+            <Image
+              source={{ uri: imageUrl(item.storage_url) }}
+              style={styles.thumb}
+              contentFit="cover"
+            />
+            <TouchableOpacity
+              style={[styles.deleteBtn, deleting === item.id && styles.deleteBtnDisabled]}
+              onPress={() => handleDelete(item)}
+              disabled={deleting === item.id}
+            >
+              <Text style={styles.deleteBtnText}>
+                {deleting === item.id ? "Deleting…" : "Delete"}
               </Text>
-              {(item.low_value_flags ?? []).length > 0 && (
-                <Text style={styles.flags}>{(item.low_value_flags ?? []).join(", ")}</Text>
-              )}
-            </View>
-            <TouchableOpacity style={styles.deleteBtn} onPress={() => confirmDelete(item)}>
-              <Text style={styles.deleteBtnText}>Delete</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -129,15 +145,13 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   thumb: { width: "100%", aspectRatio: 1, backgroundColor: "#222" },
-  infoRow: { padding: 8 },
-  score: { color: "#e05", fontSize: 12, fontWeight: "600" },
-  flags: { color: "#888", fontSize: 11, marginTop: 2 },
   deleteBtn: {
     backgroundColor: "#3a0a0a",
-    paddingVertical: 8,
+    paddingVertical: 10,
     alignItems: "center",
     borderTopWidth: 1,
     borderTopColor: "#2a0a0a",
   },
+  deleteBtnDisabled: { opacity: 0.4 },
   deleteBtnText: { color: "#e05", fontWeight: "600", fontSize: 13 },
 });
