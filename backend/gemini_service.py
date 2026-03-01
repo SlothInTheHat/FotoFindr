@@ -53,19 +53,24 @@ Example output: ["dog", "happy"]
         return []
 
 
-def generate_description(image, objects, emotions):
+# backend/gemini_service.py
 
+def generate_description(image_bytes, objects, emotions):
+    model = _get_model() # Added parens to call the function
+    
     prompt = f"""
-You are describing an image.
+    You are describing an image for a user.
+    Detected objects: {objects}
+    Detected emotions: {emotions}
 
-Detected objects: {objects}
-Detected emotions: {emotions}
+    Using the image and these tags, generate a natural, conversational description.
+    Keep it 1-3 sentences.
+    """
 
-Using the image and tags, generate a natural language description of the scene.
-Mention the objects and the emotional tone if relevant.
-Keep it 1-3 sentences.
-"""
-
-    response = _get_model.generate_content([prompt, image])
+    # Pass the actual image data as a dict for the GenerativeModel
+    response = model.generate_content([
+        prompt, 
+        {"mime_type": "image/jpeg", "data": image_bytes}
+    ])
 
     return response.text.strip()
