@@ -4,13 +4,14 @@ import json
 import asyncio
 import traceback
 import numpy as np
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
 import snowflake.connector
 from sqlalchemy import create_engine, text
+from search import find_matches
 from config import settings
 
 
