@@ -4,15 +4,9 @@ import json
 import asyncio
 import traceback
 import numpy as np
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-
-
-import snowflake.connector
-from sqlalchemy import create_engine, text
-from search import find_matches
-from config import settings
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -29,8 +23,6 @@ class _NumpyEncoder(json.JSONEncoder):
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-# Allow running from inside backend/ (uvicorn main:app) without PYTHONPATH tricks.
-# Adds the project root so that `backend`, `pipeline`, and `search` are all importable.
 _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
@@ -55,6 +47,7 @@ from db import (
     clear_user_photos,
     get_pipeline_status,
     get_photo_by_id,
+    get_untagged_photos,
 )
 from gemini_service import find_matching_labels
 from narration import router as narration_router
@@ -106,12 +99,6 @@ app.include_router(narration_router)
 async def _run_ai_pipeline(
     photo_id: str, image_path: Path, photo_meta: dict | None = None
 ) -> None:
-    """Run YOLO + DeepFace on the saved JPEG and persist results to both DBs.
-
-    photo_meta: existing SQLite record (user_id, storage_url, caption, tags, …).
-    When provided, all metadata is included in the Snowflake upsert so the row
-    is created if it doesn't exist yet.
-    """
     try:
         image_bytes = image_path.read_bytes()
     except Exception as e:
@@ -126,7 +113,6 @@ async def _run_ai_pipeline(
         return_exceptions=True,
     )
 
-    # Serialize YOLO
     if isinstance(yolo_result, Exception) or yolo_result is None:
         print(f"[pipeline] yolo failed for {photo_id}: {yolo_result}")
         yolo_json = "[]"
@@ -135,7 +121,6 @@ async def _run_ai_pipeline(
             [{"label": o.label, "confidence": o.confidence} for o in yolo_result]
         )
 
-    # Serialize DeepFace
     if isinstance(deepface_result, Exception) or (
         isinstance(deepface_result, dict) and "error" in deepface_result
     ):
@@ -164,10 +149,9 @@ async def _run_ai_pipeline(
     except Exception as e:
         print(f"[pipeline] sqlite update failed for {photo_id}: {e}")
 
-    # Upsert to Snowflake — inserts the row if it doesn't exist yet, otherwise updates it.
     filename = meta.get("storage_url", f"/uploads/{photo_id}.jpg")
     try:
-        await loop.run_in_executor(None, sf_db.upsert_photo, photo_id, filename, result)  # type: ignore[arg-type]
+        await loop.run_in_executor(None, sf_db.upsert_photo, photo_id, filename, result)
     except Exception as e:
         print(f"[pipeline] snowflake upsert failed for {photo_id}: {e}")
 
@@ -188,21 +172,6 @@ class NameRequest(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
-conn = snowflake.connector.connect(
-    account=settings.snowflake_account.replace("/", "-"),
-    user=settings.snowflake_user,
-    password=settings.snowflake_password,
-    database=settings.snowflake_database,
-    schema=settings.snowflake_schema,
-    warehouse=settings.snowflake_warehouse,
-)
-
-engine = create_engine(
-    f"snowflake://{settings.snowflake_account.replace('/', '-')}.snowflakecomputing.com",
-    creator=lambda: conn,
-)
-
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -212,9 +181,9 @@ def health():
 async def upload_photo(
     file: UploadFile = File(...),
     user_id: str = Form(...),
-    device_uri: str = Form(default=""),  # stored in Snowflake via /reprocess
-    max_width: int = 1080,  # max width for resizing
-    quality: int = 85,  # JPEG quality
+    device_uri: str = Form(default=""),
+    max_width: int = 1080,
+    quality: int = 85,
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=415, detail="Only image files accepted.")
@@ -227,7 +196,6 @@ async def upload_photo(
     save_path = UPLOAD_DIR / f"{photo_id}.jpg"
 
     try:
-        # Detect HEIC/HEIF and convert
         if file.content_type in [
             "image/heic",
             "image/heif",
@@ -237,7 +205,6 @@ async def upload_photo(
         else:
             img = Image.open(io.BytesIO(file_bytes))
 
-        # Fix orientation based on EXIF
         try:
             for orientation in ExifTags.TAGS.keys():
                 if ExifTags.TAGS[orientation] == "Orientation":
@@ -254,24 +221,21 @@ async def upload_photo(
         except Exception:
             pass
 
-        # Convert to RGB for JPEG
         if img.mode != "RGB":
             img = img.convert("RGB")
 
-        # Resize while keeping aspect ratio
         if img.width > max_width:
             ratio = max_width / img.width
             new_height = int(img.height * ratio)
             img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
 
-        # Save as JPEG
         img.save(save_path, format="JPEG", quality=quality, optimize=True)
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Image processing failed: {e}")
 
     storage_url = f"/uploads/{photo_id}.jpg"
-    insert_photo(photo_id, user_id, storage_url)
+    insert_photo(photo_id, user_id, storage_url, device_uri)
 
     return {"photo_id": photo_id, "storage_url": storage_url, "message": "Uploaded."}
 
@@ -302,7 +266,6 @@ def name_person_endpoint(person_id: str, body: NameRequest):
 
 @app.post("/clear/{user_id}")
 async def clear_endpoint(user_id: str):
-    """Clear uploads folder, SQLite, and Snowflake for a user. Called by mobile app before re-uploading."""
     for f in UPLOAD_DIR.glob("*.jpg"):
         try:
             f.unlink()
@@ -325,7 +288,6 @@ async def clear_endpoint(user_id: str):
 
 @app.get("/status/{user_id}")
 async def pipeline_status(user_id: str):
-    """Returns how many photos have been processed by the AI pipeline."""
     return get_pipeline_status(user_id)
 
 
@@ -398,42 +360,70 @@ async def search_photos(req: SearchRequest):
 
 
 @app.get("/image_labels/")
-def get_image_labels(image_id: str = Query(..., description="The ID of the image")):
-    """
-    Returns all YOLO object labels and DeepFace dominant emotions for a given image.
-    """
-    query = text("SELECT yolo_data, deepface_data FROM PHOTOS WHERE id = :image_id")
+def image_labels(image_id: str):
+    photo = get_photo_by_id(image_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail=f"Photo {image_id} not found")
 
-    with engine.connect() as conn:
-        result = conn.execute(query, {"image_id": image_id}).fetchone()
-
-    if not result:
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    labels = []
-
-    # Parse YOLO labels
-    try:
-        yolo_objs = json.loads(result.yolo_data)
-        labels.extend([obj["label"] for obj in yolo_objs])
-    except (TypeError, json.JSONDecodeError, KeyError):
-        pass
-
-    # Parse DeepFace dominant emotions
-    try:
-        df_objs = json.loads(result.deepface_data)
-        labels.extend(
-            [obj["dominant_emotion"] for obj in df_objs if "dominant_emotion" in obj]
-        )
-    except (TypeError, json.JSONDecodeError, KeyError):
-        pass
+    labels: list[str] = []
+    for obj in photo.get("detected_objects") or []:
+        if isinstance(obj, dict) and obj.get("label"):
+            labels.append(obj["label"])
+    for face in photo.get("emotions") or []:
+        if isinstance(face, dict) and face.get("dominant_emotion"):
+            labels.append(face["dominant_emotion"])
 
     return {"image_id": image_id, "labels": labels}
 
 
+@app.get("/untagged/{user_id}")
+def untagged_photos(user_id: str):
+    """Photos that completed the pipeline but have no detected objects or emotions."""
+    return {"photos": get_untagged_photos(user_id)}
+
+
+@app.post("/search/")
+async def search_photos(req: SearchRequest):
+    all_photos = get_all_photos_for_user(req.user_id)
+
+    object_labels: set[str] = set()
+    emotion_labels: set[str] = set()
+    for p in all_photos:
+        for obj in p.get("detected_objects") or []:
+            if isinstance(obj, dict) and obj.get("label"):
+                object_labels.add(obj["label"].lower())
+        for face in p.get("emotions") or []:
+            if isinstance(face, dict) and face.get("dominant_emotion"):
+                emotion_labels.add(face["dominant_emotion"].lower())
+
+    loop = asyncio.get_running_loop()
+    matching = await loop.run_in_executor(
+        None, find_matching_labels, req.query, list(object_labels), list(emotion_labels)
+    )
+    matching_set = {m.lower() for m in matching}
+
+    if matching_set:
+        photos = [
+            p
+            for p in all_photos
+            if any(
+                isinstance(obj, dict) and obj.get("label", "").lower() in matching_set
+                for obj in (p.get("detected_objects") or [])
+            )
+            or any(
+                isinstance(face, dict)
+                and face.get("dominant_emotion", "").lower() in matching_set
+                for face in (p.get("emotions") or [])
+            )
+        ]
+    else:
+        photos = all_photos
+
+    return {"photos": photos[: req.limit], "matched_labels": list(matching_set)}
+
+
 @app.post("/reprocess/{user_id}")
 async def reprocess_all(user_id: str, background_tasks: BackgroundTasks):
-    """Re-run YOLO + DeepFace on every stored photo for a user."""
     photos = get_all_photos_for_user(user_id)
     queued = 0
     for photo in photos:
@@ -448,11 +438,9 @@ async def reprocess_all(user_id: str, background_tasks: BackgroundTasks):
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     messages = []
-
     for err in exc.errors():
         field = err["loc"][-1]
         messages.append(f"{field}: {err['msg']}")
-
     return JSONResponse(
         status_code=422,
         content={

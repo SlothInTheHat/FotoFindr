@@ -75,6 +75,7 @@ def init_db() -> None:
             ("importance_score", "REAL DEFAULT 1.0"),
             ("low_value_flags",  "TEXT DEFAULT '[]'"),
             ("embedding",        "TEXT DEFAULT NULL"),
+            ("device_uri",       "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE photos ADD COLUMN {col} {defn}")
@@ -92,11 +93,11 @@ def clear_user_photos(user_id: str) -> None:
         conn.execute("DELETE FROM photos WHERE user_id = ?", (user_id,))
 
 
-def insert_photo(photo_id: str, user_id: str, storage_url: str) -> None:
+def insert_photo(photo_id: str, user_id: str, storage_url: str, device_uri: str = "") -> None:
     with _get_conn() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO photos (id, user_id, storage_url) VALUES (?, ?, ?)",
-            (photo_id, user_id, storage_url),
+            "INSERT OR IGNORE INTO photos (id, user_id, storage_url, device_uri) VALUES (?, ?, ?, ?)",
+            (photo_id, user_id, storage_url, device_uri),
         )
 
 
@@ -226,6 +227,21 @@ def get_all_photos_for_user(user_id: str) -> list[dict]:
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM photos WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_dict(dict(row)) for row in rows]
+
+
+def get_untagged_photos(user_id: str) -> list[dict]:
+    """Photos that ran through the pipeline but have no detected objects or emotions."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM photos
+               WHERE user_id = ?
+               AND detected_objects IS NOT NULL
+               AND detected_objects = '[]'
+               AND (emotions IS NULL OR emotions = '[]')
+               ORDER BY created_at DESC""",
             (user_id,),
         ).fetchall()
     return [_row_to_dict(dict(row)) for row in rows]
