@@ -39,6 +39,7 @@ serviceAccountKey.json
 # local tests / scratch
 test_yolo.py
 test_picture.png
+test_gemini.py
 
 # YOLO weights
 yolov8n.pt
