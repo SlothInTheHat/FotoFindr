@@ -152,6 +152,7 @@ export default function CameraRollScreen() {
       const res = await fetch(`${API_BASE}/upload/`, { method: "POST", body: formData, signal: controller.signal });
       const data = await res.json();
       const photoId: string = data.photo_id;
+      console.log('photo id is ', photoId);
       setPhotos((prevPhotos) =>
         prevPhotos.map((photo) =>
           photo.assetId === asset.id ? { ...photo, photoId } : photo

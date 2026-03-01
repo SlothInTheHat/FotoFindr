@@ -8,6 +8,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from search import find_matches
+
 
 class _NumpyEncoder(json.JSONEncoder):
     def default(self, o):
@@ -31,6 +33,11 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTa
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from config import settings
+
+import snowflake.connector
+from sqlalchemy import create_engine, text
 
 from PIL import Image, ExifTags
 import pillow_heif
@@ -172,6 +179,21 @@ class NameRequest(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
+conn = snowflake.connector.connect(
+    account=settings.snowflake_account.replace("/", "-"),
+    user=settings.snowflake_user,
+    password=settings.snowflake_password,
+    database=settings.snowflake_database,
+    schema=settings.snowflake_schema,
+    warehouse=settings.snowflake_warehouse,
+)
+
+engine = create_engine(
+    f"snowflake://{settings.snowflake_account.replace('/', '-')}.snowflakecomputing.com",
+    creator=lambda: conn,
+)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -181,9 +203,9 @@ def health():
 async def upload_photo(
     file: UploadFile = File(...),
     user_id: str = Form(...),
-    device_uri: str = Form(default=""),
-    max_width: int = 1080,
-    quality: int = 85,
+    device_uri: str = Form(default=""),  # stored in Snowflake via /reprocess
+    max_width: int = 1080,  # max width for resizing
+    quality: int = 85,  # JPEG quality
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=415, detail="Only image files accepted.")
@@ -196,6 +218,7 @@ async def upload_photo(
     save_path = UPLOAD_DIR / f"{photo_id}.jpg"
 
     try:
+        # Detect HEIC/HEIF and convert
         if file.content_type in [
             "image/heic",
             "image/heif",
@@ -205,6 +228,7 @@ async def upload_photo(
         else:
             img = Image.open(io.BytesIO(file_bytes))
 
+        # Fix orientation based on EXIF
         try:
             for orientation in ExifTags.TAGS.keys():
                 if ExifTags.TAGS[orientation] == "Orientation":
@@ -221,21 +245,24 @@ async def upload_photo(
         except Exception:
             pass
 
+        # Convert to RGB for JPEG
         if img.mode != "RGB":
             img = img.convert("RGB")
 
+        # Resize while keeping aspect ratio
         if img.width > max_width:
             ratio = max_width / img.width
             new_height = int(img.height * ratio)
             img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
 
+        # Save as JPEG
         img.save(save_path, format="JPEG", quality=quality, optimize=True)
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Image processing failed: {e}")
 
     storage_url = f"/uploads/{photo_id}.jpg"
-    insert_photo(photo_id, user_id, storage_url, device_uri)
+    insert_photo(photo_id, user_id, storage_url)
 
     return {"photo_id": photo_id, "storage_url": storage_url, "message": "Uploaded."}
 
@@ -312,46 +339,6 @@ def image_labels(image_id: str):
 def untagged_photos(user_id: str):
     """Photos that completed the pipeline but have no detected objects or emotions."""
     return {"photos": get_untagged_photos(user_id)}
-
-
-@app.post("/search/")
-async def search_photos(req: SearchRequest):
-    all_photos = get_all_photos_for_user(req.user_id)
-
-    object_labels: set[str] = set()
-    emotion_labels: set[str] = set()
-    for p in all_photos:
-        for obj in p.get("detected_objects") or []:
-            if isinstance(obj, dict) and obj.get("label"):
-                object_labels.add(obj["label"].lower())
-        for face in p.get("emotions") or []:
-            if isinstance(face, dict) and face.get("dominant_emotion"):
-                emotion_labels.add(face["dominant_emotion"].lower())
-
-    loop = asyncio.get_running_loop()
-    matching = await loop.run_in_executor(
-        None, find_matching_labels, req.query, list(object_labels), list(emotion_labels)
-    )
-    matching_set = {m.lower() for m in matching}
-
-    if matching_set:
-        photos = [
-            p
-            for p in all_photos
-            if any(
-                isinstance(obj, dict) and obj.get("label", "").lower() in matching_set
-                for obj in (p.get("detected_objects") or [])
-            )
-            or any(
-                isinstance(face, dict)
-                and face.get("dominant_emotion", "").lower() in matching_set
-                for face in (p.get("emotions") or [])
-            )
-        ]
-    else:
-        photos = all_photos
-
-    return {"photos": photos[: req.limit], "matched_labels": list(matching_set)}
 
 
 @app.post("/reprocess/{user_id}")
